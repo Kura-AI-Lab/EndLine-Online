@@ -1,0 +1,674 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>エンドライン（EndLine） - 運要素ゼロ侵略ゲーム（1v1 / 2v2）</title>
+<style>
+  :root{
+    --bg:#0f1220; --panel:#171b2e; --text:#e6e8ef; --muted:#9aa3b2;
+    --cell:#1f2542; --cell-alt:#232a4d; --hl:#31406b;
+    --legal:#2a8855; --capture:#a24747; --stack:#5f4bb6;
+    --teamA:#3cc6ff; --teamB:#ffa84d;
+
+    --wrap-w: min(1000px, 96vw);
+    --gap: clamp(6px, 1.2vw, 14px);
+    --radius: 14px;
+    --pad: clamp(10px, 1.6vw, 16px);
+    --font: clamp(14px, 1.2vw, 16px);
+    --title: clamp(20px, 2.4vw, 28px);
+
+    --board-max: min(92vmin, 720px);
+    --board-gap: clamp(3px, 0.7vmin, 6px);
+
+    --dot-scale: 0.72;
+    --badge: clamp(16px, 2.2vmin, 22px);
+  }
+  html, body{
+    height:100%; margin:0; background:linear-gradient(180deg,#0b0f1c,#10162a);
+    color:var(--text); font-family: system-ui,-apple-system,Segoe UI,Roboto,Noto Sans JP,"Hiragino Kaku Gothic ProN",Meiryo,sans-serif;
+    font-size: var(--font);
+  }
+  .wrap{ width:var(--wrap-w); margin:0 auto; padding: calc(env(safe-area-inset-top) + 10px) var(--pad) var(--pad); }
+  h1{ margin:0 0 8px; font-weight:800; letter-spacing:.3px; font-size:var(--title); }
+  .subtitle{ color:var(--muted); font-size: clamp(12px,1vw,14px); }
+
+  .row{ display:grid; grid-template-columns: 360px 1fr; gap: var(--gap); align-items:start; }
+  @media (max-width: 900px){
+    .row{ grid-template-columns: 1fr; }
+    .controls{ order:2; }
+    .boardPanel{ order:1; }
+  }
+
+  .panel{
+    background:var(--panel); border:1px solid #222842; border-radius:var(--radius);
+    padding: var(--pad); box-shadow: 0 8px 24px rgba(0,0,0,.25), inset 0 1px 0 rgba(255,255,255,.03);
+  }
+
+  .controls label{ display:block; font-size:.95em; color:var(--muted); margin-top:10px; }
+  .controls select, .controls button{
+    width:100%; padding: 12px; border-radius:12px; border:1px solid #2a3155; background:#0f1430; color:var(--text); outline:none;
+  }
+  .controls select{ min-height: 44px; }
+  .controls button{
+    margin-top:10px; cursor:pointer; font-weight:800; letter-spacing:.3px;
+    background: linear-gradient(180deg,#1b2350,#12183c); min-height: 48px; touch-action: manipulation;
+  }
+  .rowPlayers{ display:grid; grid-template-columns: 1fr 1fr; gap:8px; }
+  .pitem{ display:flex; gap:8px; align-items:center; }
+  .dotMini{ width:14px; height:14px; border-radius:50%; border:1px solid rgba(255,255,255,.35); }
+  .status{ margin-top:8px; font-weight:800; letter-spacing:.2px }
+  .footer{ margin-top:12px; color:var(--muted); font-size:.95em; }
+
+  .boardPanel{ display:grid; gap: var(--gap); }
+  .boardWrap{ width:100%; max-width: var(--board-max); margin:0 auto; aspect-ratio: 1/1; }
+  .board{
+    width:100%; height:100%;
+    display:grid; gap: var(--board-gap);
+    padding: clamp(6px, 1vmin, 10px);
+    background:#0b1027; border:1px solid #222842; border-radius:var(--radius);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.03);
+    touch-action: manipulation;
+  }
+  .cell{
+    position:relative; background:var(--cell);
+    border-radius: clamp(8px, 1.4vmin, 12px); box-shadow: inset 0 0 0 1px rgba(255,255,255,.03);
+    aspect-ratio: 1 / 1; overflow:hidden;
+  }
+  .cell.alt{ background:var(--cell-alt); }
+  .cell.hl{ outline: 2px solid var(--hl); outline-offset:-2px; }
+
+  .dot{
+    position:absolute; left:50%; top:50%;
+    width: calc(100% * var(--dot-scale)); height: calc(100% * var(--dot-scale));
+    transform: translate(-50%,-50%); border-radius:50%;
+    box-shadow: 0 4px 10px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.25);
+    border: 2px solid rgba(255,255,255,.35); display:flex; align-items:center; justify-content:center; user-select:none; pointer-events:none;
+  }
+  .dot > span{ font-weight:900; font-size: clamp(12px, 2.4vmin, 18px); transform: translateY(-1px); text-shadow: 0 1px 0 rgba(0,0,0,.3); }
+  .badge{
+    position:absolute; top: -6px; right:-6px; min-width: var(--badge); height: var(--badge); padding: 0 4px;
+    font-size: clamp(10px, 1.8vmin, 12px); line-height: var(--badge); border-radius: 999px; font-weight:900; color:#0b0f1c;
+    box-shadow: 0 2px 6px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.35); border:1px solid rgba(0,0,0,.35); text-align:center;
+  }
+  .badge.A{ background:var(--teamA); } .badge.B{ background:var(--teamB); }
+
+  .legal::after{ content:""; position:absolute; inset:6%; border-radius:10px; outline: 3px solid var(--legal); outline-offset:-6px; box-shadow: 0 0 0 4px rgba(42,136,85,.18); }
+  .capture::after{ content:""; position:absolute; inset:6%; border-radius:10px; outline: 3px solid var(--capture); outline-offset:-6px; box-shadow: 0 0 0 4px rgba(162,71,71,.2); }
+  .stack::after{ content:""; position:absolute; inset:6%; border-radius:10px; outline: 3px solid var(--stack); outline-offset:-6px; box-shadow: 0 0 0 4px rgba(95,75,182,.18); }
+</style>
+<script src="/socket.io/socket.io.js"></script>
+</head>
+<body>
+  <div class="wrap">
+    <h1>エンドライン（EndLine） <span class="subtitle">— 運要素ゼロ侵略ゲーム（1v1 / 2v2）</span></h1>
+
+    <div class="row">
+      <!-- 操作パネル -->
+      <div class="panel controls">
+        <label>ゲームモード</label>
+        <select id="mode" aria-label="ゲームモード選択">
+          <option value="2v2_8x8" selected>8 × 8 ／ 2対2（北+南 vs 西+東）</option>
+          <option value="1v1_6x6">6 × 6 ／ 1対1（北 vs 南）</option>
+        </select>
+
+        <label style="margin-top:12px;">プレイヤー割当（不足はAIで補充できます）</label>
+        <div class="rowPlayers">
+          <div class="pitem"><span class="dotMini" style="background:#6cc4ff"></span> P1 北：<select id="selP0"><option>Human</option><option selected>AI</option><option>Off</option></select></div>
+          <div class="pitem"><span class="dotMini" style="background:#ffd166"></span> P2 南：<select id="selP1"><option selected>Human</option><option>AI</option><option>Off</option></select></div>
+          <div class="pitem"><span class="dotMini" style="background:#8bd17c"></span> P3 西：<select id="selP2"><option>Human</option><option selected>AI</option><option>Off</option></select></div>
+          <div class="pitem"><span class="dotMini" style="background:#ff8fa3"></span> P4 東：<select id="selP3"><option>Human</option><option>AI</option><option selected>Off</option></select></div>
+        </div>
+        <div style="margin-top:8px;">
+          <label style="display:flex;gap:8px;align-items:center;cursor:pointer;">
+            <input type="checkbox" id="autoFill" checked /> <span>不足は自動でAI補充</span>
+          </label>
+        </div>
+
+        <label>ルール（要点）</label>
+        <div class="info">
+          ・<b>高さ上限 = 2</b><br>
+          ・<b>合体</b>：<u>1+1 のみ可</u>（2+1、1+2、2+2 は不可）<br>
+          ・<b>移動</b>：高さ1＝8方向／ 高さ2＝4方向<br>
+          ・2v2はチーム A（北+南） vs チーム B（西+東）。どちらかがゴール到達で勝利。
+        </div>
+
+        <button id="start">新しく始める</button>
+        <div style="display:flex; gap:8px;">
+          <button id="btnFill">不足をAIで補充</button>
+          <button id="btnSwap">Human/AI を入れ替え（現在のモードで使用する側）</button>
+        </div>
+
+        <div class="status" id="status">準備中…</div>
+        <div class="footer">AIは端末性能に合わせて自動調整（モバイルは軽量設定）</div>
+      </div>
+
+      <!-- 盤面 -->
+      <div class="panel boardPanel">
+        <div class="boardWrap"><div id="board" class="board" role="grid" aria-label="ゲーム盤"></div></div>
+        <div class="footer">
+          タップ/クリックで「選択→移動」。合法＝緑、捕獲＝赤、合体＝紫。<br>
+          <span id="testStatus"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  // ======= 見た目の色名 =======
+  const PLAYER_COLORS = [
+    { name: 'North (P1)', color: '#6cc4ff' },
+    { name: 'South (P2)', color: '#ffd166' },
+    { name: 'West (P3)',  color: '#8bd17c' },
+    { name: 'East (P4)',  color: '#ff8fa3' },
+  ];
+  const HEIGHT_CAP = 2;
+  const TEAM_BADGE = (p)=> (p===0||p===1) ? 'A' : 'B';
+
+  // ======= 盤・状態 =======
+  let size = 8, playerCount = 4, piecesPerSide = 4, mode = 'team';
+  let board = [];  // board[y][x] = {p, id, h}
+  let current = 0;
+  let eliminated = new Set();
+  let selected = null; // {x,y}
+
+  // 入力割当
+  const selP = [document.getElementById('selP0'),document.getElementById('selP1'),document.getElementById('selP2'),document.getElementById('selP3')];
+  const autoFillEl = document.getElementById('autoFill');
+
+  let IS_AI = [true,false,true,false];  // 例: P1/P3はAI
+  let aiThinking = false;
+  let aiWorker = null;
+
+  // ======= 参照 =======
+  const boardEl = document.getElementById('board');
+  const statusEl = document.getElementById('status');
+  const testEl = document.getElementById('testStatus');
+
+  // ======= ユーティリティ =======
+  const inBounds = (x,y) => x>=0 && x<size && y>=0 && y<size;
+  const at = (x,y) => board[y][x];
+  const setAt = (x,y,v) => board[y][x]=v;
+  const livingPlayers = () => [...Array(playerCount).keys()].filter(p=>!eliminated.has(p));
+
+  const nextPlayer = () => {
+    const baseOrder = [0,3,1,2]; // 北→東→南→西
+    const alive = baseOrder.filter(p => p < playerCount && !eliminated.has(p));
+    if (alive.length===0) return;
+    if (!alive.includes(current)) { current = alive[0]; return; }
+    const i = alive.indexOf(current);
+    current = alive[(i+1) % alive.length];
+  };
+
+  function hexToRgba(hex, a=1){
+    const h = hex.replace('#',''); const n = parseInt(h,16);
+    return `rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`;
+  }
+
+  // 勝利辺
+  function goalReached(p,x,y,size){
+    if (p===0) return y===size-1;
+    if (p===1) return y===0;
+    if (p===2) return x===size-1;
+    if (p===3) return x===0;
+    return false;
+  }
+
+  // ======= 合法手 =======
+  function legalMovesFor(p,x,y){
+    const moves = [];
+    const piece = at(x,y); if (!piece) return moves;
+    const myH = piece.h || 1;
+
+    const dirs4 = [{dx:1,dy:0},{dx:-1,dy:0},{dx:0,dy:1},{dx:0,dy:-1}];
+    const diags = [{dx:1,dy:1},{dx:1,dy:-1},{dx:-1,dy:1},{dx:-1,dy:-1}];
+    const dirs = (myH>=2) ? dirs4 : [...dirs4, ...diags];
+
+    for (const v of dirs){
+      const nx=x+v.dx, ny=y+v.dy; if (!inBounds(nx,ny)) continue;
+      const t = at(nx,ny);
+      if (!t){
+        moves.push({x:nx,y:ny,type:'move'});
+      } else if (t.p===p){
+        const th = t.h || 1;
+        if (myH===1 && th===1 && (myH+th)<=HEIGHT_CAP){
+          moves.push({x:nx,y:ny,type:'stack'});
+        }
+      } else {
+        const oppH = t.h || 1;
+        if (oppH <= myH){
+          moves.push({x:nx,y:ny,type:'capture'});
+        }
+      }
+    }
+    return moves;
+  }
+
+  function checkEliminations(){
+    for (let p=0;p<playerCount;p++){
+      if (eliminated.has(p)) continue;
+      let exists=false, movable=false;
+      for (let y=0;y<size;y++) for (let x=0;x<size;x++){
+        const c = at(x,y);
+        if (c && c.p===p){ exists=true; if (legalMovesFor(p,x,y).length>0) movable=true; }
+      }
+      if (!exists || !movable) eliminated.add(p);
+    }
+  }
+
+  // ======= 盤生成 =======
+  function initBoard(){
+    board = Array.from({length:size},()=>Array.from({length:size},()=>null));
+
+    const placeLine = (p, lineIndex, horizontal=true) => {
+      const coords = [];
+      const start = Math.floor((size - piecesPerSide)/2);
+      if (horizontal){
+        for (let i=0;i<piecesPerSide;i++){ coords.push([start+i, lineIndex]); }
+      } else {
+        for (let i=0;i<piecesPerSide;i++){ coords.push([lineIndex, start+i]); }
+      }
+      coords.forEach((xy,id)=>{ setAt(xy[0],xy[1],{p,id,h:1}); });
+    };
+
+    if (playerCount>=2){ placeLine(0, 0, true); placeLine(1, size-1, true); }
+    if (playerCount>=3){ placeLine(2, 0, false); }
+    if (playerCount>=4){ placeLine(3, size-1, false); }
+
+    eliminated = new Set();
+    current = 0;
+    selected = null;
+    render();
+    updateStatus();
+  }
+
+  // ======= 描画 =======
+  function render(){
+    boardEl.style.gridTemplateColumns = `repeat(${size}, 1fr)`;
+    boardEl.innerHTML = '';
+    for (let y=0;y<size;y++){
+      for (let x=0;x<size;x++){
+        const cell = document.createElement('div');
+        cell.className = 'cell'+(((x+y)%2)?' alt':'');
+        cell.dataset.x = x; cell.dataset.y = y;
+
+        // ゴール辺の発光
+        const glows=[]; let overlaps=0;
+        const cN = hexToRgba(PLAYER_COLORS[0].color, 0.55);
+        const cS = hexToRgba(PLAYER_COLORS[1].color, 0.55);
+        const cW = hexToRgba(PLAYER_COLORS[2].color, 0.55);
+        const cE = hexToRgba(PLAYER_COLORS[3].color, 0.55);
+        if (y === size - 1) { glows.push(`inset 0 -6px 0 ${cN}`); overlaps++; }
+        if (y === 0)        { glows.push(`inset 0 6px 0 ${cS}`);  overlaps++; }
+        if (x === size - 1) { glows.push(`inset -6px 0 0 ${cW}`); overlaps++; }
+        if (x === 0)        { glows.push(`inset 6px 0 0 ${cE}`);  overlaps++; }
+        if (overlaps>=2){ glows.push(`0 0 12px rgba(255,255,255,.35)`,`0 0 18px rgba(255,255,255,.18)`); }
+        cell.style.boxShadow = ['inset 0 0 0 1px rgba(255,255,255,.03)',...glows].join(', ');
+
+        // 駒
+        const piece = at(x,y);
+        if (piece){
+          const dot = document.createElement('div'); dot.className='dot'; dot.style.background = PLAYER_COLORS[piece.p].color;
+          const label = document.createElement('span'); label.textContent = piece.h || 1; dot.appendChild(label);
+          const badge = document.createElement('span'); const mark = TEAM_BADGE(piece.p);
+          badge.className = `badge ${mark}`; badge.textContent = mark; badge.title = (mark==='A')?'Team A（北+南）':'Team B（西+東）'; dot.appendChild(badge);
+          cell.appendChild(dot);
+        }
+
+        cell.addEventListener('click', onCellClick, {passive:true});
+        boardEl.appendChild(cell);
+      }
+    }
+
+    // 選択中
+    if (selected){
+      const {x,y} = selected;
+      if (!inBounds(x,y)) { selected=null; return; }
+      const selPiece = at(x,y); if (!selPiece) { selected=null; return; }
+      const idx = y*size+x; const selectedEl = boardEl.children[idx]; if (!selectedEl) { selected=null; return; }
+      selectedEl.classList.add('hl');
+      for (const m of legalMovesFor(selPiece.p,x,y)){
+        const i = m.y*size + m.x; const el = boardEl.children[i]; if (!el) continue;
+        if (m.type==='capture') el.classList.add('capture'); else if (m.type==='stack') el.classList.add('stack'); else el.classList.add('legal');
+      }
+    }
+  }
+
+  function updateStatus(msg){
+    if (msg){ statusEl.textContent = msg; return; }
+    const alive = livingPlayers();
+    if (alive.length===1 && playerCount===2){ statusEl.textContent = `勝者：${PLAYER_COLORS[alive[0]].name}`; return; }
+    if (playerCount===4){
+      const team = (TEAM_BADGE(current)==='A') ? 'チームA（北+南）' : 'チームB（西+東）';
+      statusEl.textContent = `手番：${team}：${PLAYER_COLORS[current].name}`; 
+    } else {
+      statusEl.textContent = `手番：${PLAYER_COLORS[current].name}（1v1）`;
+    }
+  }
+
+  // ======= 入力 =======
+  function onCellClick(e){
+    if (aiThinking) return;
+    if (IS_AI[current]) return; // AIのターンは入力無効
+    const x = +e.currentTarget.dataset.x, y = +e.currentTarget.dataset.y;
+    const cell = at(x,y);
+    if (livingPlayers().length<=1 && playerCount===2) return;
+    if (eliminated.has(current)) { nextPlayer(); updateStatus(); return; }
+
+    if (selected){
+      const s = selected; if (!inBounds(s.x,s.y)) { selected=null; render(); return; }
+      const piece = at(s.x,s.y); if (!piece || piece.p!==current){ selected=null; render(); return; }
+      const legal = legalMovesFor(current, s.x, s.y); const chosen = legal.find(m=>m.x===x && m.y===y);
+      if (!chosen){ selected = null; render(); return; }
+
+      if (executeMoveDirect({fx:s.x,fy:s.y,tx:x,ty:y,type:chosen.type})) return;
+      checkEliminations(); nextPlayer(); selected=null; render(); updateStatus(); maybeStartAITurn();
+      return;
+    }
+    if (cell && cell.p===current){ selected = {x,y}; render(); }
+  }
+
+  // ======= 直接適用・勝利判定 =======
+  function executeMoveDirect(m){
+    const piece = at(m.fx, m.fy);
+    setAt(m.fx, m.fy, null);
+    const cellNow = at(m.tx, m.ty);
+    if (!cellNow){ setAt(m.tx, m.ty, {p:piece.p, id:piece.id, h:piece.h}); }
+    else if (cellNow.p===piece.p && m.type==='stack'){ setAt(m.tx, m.ty, {p:piece.p, id:piece.id, h:2}); }
+    else { setAt(m.tx, m.ty, {p:piece.p, id:piece.id, h:piece.h}); }
+
+    if (goalReached(current, m.tx, m.ty, size)){
+      if (playerCount===4){
+        const winTeam = (TEAM_BADGE(current)==='A') ? '（Team A：北 + 南）' : '（Team B：西 + 東）';
+        statusEl.textContent = `勝利：${winTeam}`; eliminated = new Set([0,1,2,3]); render(); return true;
+      } else {
+        statusEl.textContent = `勝者：${PLAYER_COLORS[current].name}`; eliminated = new Set(livingPlayers()); render(); return true;
+      }
+    }
+    return false;
+  }
+
+  // ======= スナップショット（AIへ渡す） =======
+  function snapshotState(){
+    return { size, playerCount, current, board: board.map(row=>row.map(c=>c?{p:c.p,h:c.h}:null)) };
+  }
+
+  // ======= 端末に応じたAI予算 =======
+  function computeAIOpts(){
+    const isMobile = matchMedia('(pointer:coarse)').matches || (typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent));
+    const cores = navigator.hardwareConcurrency || 2;
+    const mem = navigator.deviceMemory || 2;
+
+    if (isMobile){
+      // 省電力・短時間（でも強め）
+      return { maxTimeMs: 1100, maxDepth: 8, randomness: 0.0, ttMax: 120000 };
+    }
+    // PC：少しリッチに
+    if (cores >= 8 || mem >= 8) return { maxTimeMs: 2200, maxDepth: 10, randomness: 0.0, ttMax: 220000 };
+    return { maxTimeMs: 1600, maxDepth: 9, randomness: 0.0, ttMax: 160000 };
+  }
+
+  // ======= AI Worker（HTML内で生成：強化版） =======
+  function buildAIWorker(){
+    const core = `
+      const HEIGHT_CAP=2; const TEAM_BADGE=(p)=> (p===0||p===1)?'A':'B';
+      const inB=(s,x,y)=>x>=0&&x<s&&y>=0&&y<s;
+      const clone=(b)=>b.map(r=>r.map(c=>c?{...c}:null));
+      function goalReached(p,x,y,s){ if(p===0)return y===s-1; if(p===1)return y===0; if(p===2)return x===s-1; if(p===3)return x===0; return false; }
+
+      function legalForCell(st,p,x,y){
+        const s=st.size,b=st.board; const pc=b[y][x]; if(!pc) return[];
+        const h=pc.h||1; const d4=[{dx:1,dy:0},{dx:-1,dy:0},{dx:0,dy:1},{dx:0,dy:-1}], dg=[{dx:1,dy:1},{dx:1,dy:-1},{dx:-1,dy:1},{dx:-1,dy:-1}];
+        const ds=(h>=2)?d4:d4.concat(dg); const r=[];
+        for(const v of ds){ const nx=x+v.dx, ny=y+v.dy; if(!inB(s,nx,ny)) continue; const t=b[ny][nx];
+          if(!t) r.push({fx:x,fy:y,tx:nx,ty:ny,type:'move'});
+          else if(t.p===p){ const th=t.h||1; if(h===1 && th===1 && h+th<=HEIGHT_CAP) r.push({fx:x,fy:y,tx:nx,ty:ny,type:'stack'}); }
+          else { const oh=t.h||1; if(oh<=h) r.push({fx:x,fy:y,tx:nx,ty:ny,type:'capture'}); } }
+        return r;
+      }
+      function gen(st){
+        const {size:b,board,current} = st; let L=[];
+        for(let y=0;y<b;y++)for(let x=0;x<b;x++){ const c=board[y][x]; if(c&&c.p===current) L=L.concat(legalForCell(st,c.p,x,y)); }
+        const toward=(p,x,y,s)=> p===0?y: p===1?(s-1-y): p===2?x : (s-1-x);
+        L.sort((a,bm)=>{ const p=(t)=>t==='capture'?2:(t==='stack'?1:0); const pa=p(a.type), pb=p(bm.type); if(pa!==pb) return pb-pa;
+          const ta=toward(st.current,a.tx,a.ty,st.size), tb=toward(st.current,bm.tx,bm.ty,st.size); return tb-ta; });
+        return L;
+      }
+      function apply(st,m){
+        const ns={size:st.size,playerCount:st.playerCount,current:st.current,board:clone(st.board)};
+        const from=ns.board[m.fy][m.fx]; ns.board[m.fy][m.fx]=null; const dst=ns.board[m.ty][m.tx];
+        if(!dst||m.type==='capture') ns.board[m.ty][m.tx]={p:from.p,h:from.h};
+        else if(m.type==='stack') ns.board[m.ty][m.tx]={p:from.p,h:2};
+        else ns.board[m.ty][m.tx]={p:from.p,h:from.h};
+        if(goalReached(from.p,m.tx,m.ty,ns.size)) ns.win=TEAM_BADGE(from.p);
+        const order=[0,3,1,2].filter(p=>p<ns.playerCount); const i=order.indexOf(ns.current); ns.current=order[(i+1)%order.length]; return ns;
+      }
+      function threatenedScore(st, x, y, p, h){
+        const s=st.size,b=st.board; let danger=0, support=0;
+        for(let yy=Math.max(0,y-1); yy<=Math.min(s-1,y+1); yy++){
+          for(let xx=Math.max(0,x-1); xx<=Math.min(s-1,x+1); xx++){
+            if (xx===x && yy===y) continue;
+            const t=b[yy][xx]; if(!t) continue; const th=t.h||1;
+            const is4=(xx===x||yy===y); const canMove=(th>=2? is4 : true); if(!canMove) continue;
+            if (t.p!==p){ if (th>=h) danger += (th===2?1.2:0.7); }
+            else { support += (th===2?0.5:0.25); }
+          }
+        }
+        return { danger, support };
+      }
+      function runway(st,p,x,y){
+        const s=st.size,b=st.board; let steps=0;
+        if (p===0){ for(let yy=y+1; yy<s; yy++){ if(b[yy][x]) break; steps++; } }
+        else if (p===1){ for(let yy=y-1; yy>=0; yy--){ if(b[yy][x]) break; steps++; } }
+        else if (p===2){ for(let xx=x+1; xx<s; xx++){ if(b[y][xx]) break; steps++; } }
+        else { for(let xx=x-1; xx>=0; xx--){ if(b[y][xx]) break; steps++; } }
+        return steps;
+      }
+      // 評価
+      function evalS(st,pov){
+        if(st.win) return st.win===pov?10000:-10000;
+        const {size:b,board}=st; let a=0,bv=0;
+        const toward=(p,x,y)=> p===0?y: p===1?(b-1-y): p===2?x : (b-1-x);
+        const maxTow=b-1;
+        for(let y=0;y<b;y++)for(let x=0;x<b;x++){
+          const c=board[y][x]; if(!c) continue; const t=TEAM_BADGE(c.p); const h=c.h||1;
+          const val=(h===2)?3.2:1.0; const adv=toward(c.p,x,y)/maxTow;
+          const cx=Math.abs(x-(b-1)/2), cy=Math.abs(y-(b-1)/2), cent=1-(cx+cy)/(b-1);
+          const lm=Math.min(legalForCell(st,c.p,x,y).length,6)*0.05;
+          const th=threatenedScore(st,x,y,c.p,h); const rw=runway(st,c.p,x,y);
+          const sc= val + 0.7*adv + 0.15*cent + lm
+                   - 0.6*th.danger + 0.25*th.support
+                   + 0.10*rw + (h===2? 0.15*rw : 0);
+          if(t==='A') a+=sc; else bv+=sc;
+        }
+        const diff=(pov==='A')?(a-bv):(bv-a);
+        const tempo=(TEAM_BADGE(st.current)===pov)?0.05:-0.05; return diff+tempo;
+      }
+      // 置換表（上限付き）
+      const Z={init:false, table:null, turn:null};
+      function ensureZ(sz){ if(Z.init) return; const rnd=()=> (Math.random()*2**32)|0; Z.table=[]; for(let y=0;y<10;y++){Z.table[y]=[]; for(let x=0;x<10;x++){ Z.table[y][x]={p0h1:rnd(),p0h2:rnd(),p1h1:rnd(),p1h2:rnd(),p2h1:rnd(),p2h2:rnd(),p3h1:rnd(),p3h2:rnd()};}} Z.turn=[rnd(),rnd(),rnd(),rnd()]; Z.init=true; }
+      function hkey(s){ ensureZ(s.size); let h=0; for(let y=0;y<s.size;y++)for(let x=0;x<s.size;x++){ const c=s.board[y][x]; if(!c) continue; h ^= Z.table[y][x][\`p\${c.p}h\${c.h}\`]; } h ^= Z.turn[s.current]; return h>>>0; }
+
+      function qsearch(s, alpha, beta, pov, ply=0){
+        if (ply>=10) return evalS(s, pov);
+        const stand = evalS(s, pov);
+        if (stand >= beta) return stand;
+        if (stand > alpha) alpha = stand;
+        const moves = gen(s).filter(m => m.type==='capture');
+        if (moves.length===0) return stand;
+        for (const m of moves){
+          const sc = -qsearch(apply(s,m), -beta, -alpha, pov, ply+1);
+          if (sc >= beta) return sc;
+          if (sc > alpha) alpha = sc;
+        }
+        return alpha;
+      }
+
+      function searchBestMove(state,opt={}){
+        const {maxTimeMs=1100,maxDepth=8,randomness=0.0,ttMax=120000}=opt; 
+        const pov=TEAM_BADGE(state.current);
+        const start=performance.now(), deadline=start+maxTimeMs; 
+        const TT=new Map();
+
+        function negamax(s,d,a,b){
+          const k=hkey(s), tt=TT.get(k);
+          if(tt && tt.depth>=d){
+            if(tt.flag==='EXACT') return {score:tt.value,move:tt.best};
+            if(tt.flag==='LOWER'&&tt.value>a) a=tt.value; else if(tt.flag==='UPPER'&&tt.value<b) b=tt.value;
+            if(a>=b) return {score:tt.value,move:tt.best};
+          }
+          if(performance.now()>deadline) return {score:evalS(s,pov),move:null,cutoff:true};
+          if(d===0 || s.win || gen(s).length===0){
+            return {score:qsearch(s, a, b, pov), move:null};
+          }
+          const moves=gen(s); if(moves.length===0) return {score:evalS(s,pov),move:null};
+
+          let best=null, bestSc=-Infinity, aa=a, bb=b, idx=0;
+          for (const m of moves){
+            idx++;
+            let red=0; const tactical=(m.type==='capture'||m.type==='stack');
+            if(!tactical && d>=4 && idx>3) red=1; // LMR
+
+            let r=negamax(apply(s,m), d-1-red, -bb, -aa);
+            let sc=-r.score;
+            if(red && sc>aa){ // fail-high→再探索
+              r=negamax(apply(s,m), d-1, -bb, -aa);
+              sc=-r.score;
+            }
+            if(sc>bestSc){ bestSc=sc; best=m; }
+            if(sc>aa) aa=sc;
+            if(aa>=bb) break;
+          }
+
+          let flag='EXACT'; if(bestSc<=a) flag='UPPER'; else if(bestSc>=b) flag='LOWER';
+          if (TT.size > ttMax) { TT.clear(); } // メモリ抑制
+          TT.set(k,{depth:d,value:bestSc,flag,best});
+          return {score:bestSc, move:best};
+        }
+
+        let best=null, sBest=-Infinity;
+        for(let d=2; d<=maxDepth; d++){
+          const r=negamax(state,d,-10000,10000);
+          if(r.cutoff) break;
+          if(r.move){best=r.move; sBest=r.score;}
+          if(performance.now()>deadline) break;
+        }
+        return {move:best, score:sBest};
+      }
+
+      self.onmessage=(e)=>{ const {state,options}=e.data; postMessage(searchBestMove(state,options||{})); };
+    `;
+    const blob = new Blob([core], {type:'application/javascript'});
+    return new Worker(URL.createObjectURL(blob));
+  }
+
+  // ======= AI制御 =======
+  function ensureWorker(){ if (!aiWorker) aiWorker = buildAIWorker();
+    aiWorker.onmessage = (e)=>{ aiThinking=false; const { move } = e.data;
+      if (!move){ updateStatus('パス（手なし）'); nextPlayer(); render(); updateStatus(); maybeStartAITurn(); return; }
+      const won = executeMoveDirect(move); if (won) return;
+      checkEliminations(); nextPlayer(); render(); updateStatus(); maybeStartAITurn();
+    };
+  }
+
+  function maybeStartAITurn(){
+    if (eliminated.has(current)) return;
+    if (!IS_AI[current]) return;
+    ensureWorker(); aiThinking = true;
+    statusEl.textContent = `思考中… ${PLAYER_COLORS[current].name}`;
+    aiWorker.postMessage({ state: snapshotState(), options: computeAIOpts() });
+  }
+
+  // ======= UIイベント =======
+  function readAssignmentsAndAutofill(){
+    const selVals = selP.map(s=>s.value); // 'Human' | 'AI' | 'Off'
+    if (playerCount===2){
+      if (autoFillEl.checked){
+        if (selVals[0]==='Off') selP[0].value='AI';
+        if (selVals[1]==='Off') selP[1].value='AI';
+      }
+      IS_AI[0] = selP[0].value==='AI';
+      IS_AI[1] = selP[1].value==='AI';
+      IS_AI[2] = false; IS_AI[3] = false;
+    } else {
+      if (autoFillEl.checked){
+        for (let i=0;i<4;i++){ if (selVals[i]==='Off') selP[i].value='AI'; }
+      }
+      for (let i=0;i<4;i++){ IS_AI[i] = (selP[i].value==='AI'); }
+    }
+  }
+
+  document.getElementById('btnFill').addEventListener('click', ()=>{
+    for (let i=0;i<4;i++){ if (selP[i].value==='Off') selP[i].value='AI'; }
+  });
+
+  document.getElementById('btnSwap').addEventListener('click', ()=>{
+    const m = document.getElementById('mode').value;
+    if (m==='1v1_6x6'){
+      const a = selP[0].value, b = selP[1].value;
+      selP[0].value = (a==='Human')?'AI':'Human';
+      selP[1].value = (b==='Human')?'AI':'Human';
+    } else {
+      for (let i=0;i<4;i++){
+        const v = selP[i].value;
+        if (v==='Human') selP[i].value='AI';
+        else if (v==='AI') selP[i].value='Human';
+      }
+    }
+  });
+
+  document.getElementById('start').addEventListener('click', () => {
+    const sel = document.getElementById('mode').value;
+    if (sel === '2v2_8x8'){ size = 8; playerCount = 4; piecesPerSide = 4; mode = 'team'; }
+    else { size = 6; playerCount = 2; piecesPerSide = 4; mode = 'ffa'; }
+
+    const names = ['North (P1)','South (P2)','West (P3)','East (P4)'];
+    for (let i=0;i<4;i++) PLAYER_COLORS[i].name = names[i];
+
+    readAssignmentsAndAutofill();
+    initBoard(); updateStatus(); maybeStartAITurn();
+  });
+
+  // ======= 簡易テスト =======
+  function computeLegalMovesForTest(boardT,sizeT,p,x,y){
+    const atT = (xx,yy)=>boardT[yy][xx];
+    const inB = (xx,yy)=>xx>=0&&xx<sizeT&&yy>=0&&yy<sizeT;
+    const moves=[]; const piece=atT(x,y); if(!piece) return moves;
+    const myH = piece.h||1;
+    const dirs4 = [{dx:1,dy:0},{dx:-1,dy:0},{dx:0,dy:1},{dx:0,dy:-1}];
+    const diags = [{dx:1,dy:1},{dx:1,dy:-1},{dx:-1,dy:1},{dx:-1,dy:-1}];
+    const dirs = (myH>=2) ? dirs4 : [...dirs4, ...diags];
+    for (const v of dirs){
+      const nx=x+v.dx, ny=y+v.dy; if(!inB(nx,ny)) continue; const t = atT(nx,ny);
+      if (!t) moves.push({x:nx,y:ny,type:'move'});
+      else if (t.p===p){ const th=t.h||1; if (myH===1 && th===1 && (myH+th)<=2){ moves.push({x:nx,y:ny,type:'stack'}); } }
+      else if ((t.h||1) <= myH){ moves.push({x:nx,y:ny,type:'capture'}); }
+    }
+    return moves;
+  }
+  function runDevTests(){
+    let passed = 0, failed = 0; const log = [];
+    const S=5; const empty = Array.from({length:S},()=>Array.from({length:S},()=>null));
+    let b1 = empty.map(r=>r.slice()); b1[2][2] = {p:0,h:2}; b1[2][3] = {p:1,h:2};
+    let m1 = computeLegalMovesForTest(b1,S,0,2,2).some(m=>m.type==='capture'&&m.x===3&&m.y===2); if (m1){passed++;} else {failed++; log.push('T1 failed');}
+    let b2 = empty.map(r=>r.slice()); b2[2][2] = {p:0,h:1}; b2[2][3] = {p:0,h:1};
+    let s11 = computeLegalMovesForTest(b2,S,0,2,2).some(m=>m.type==='stack'&&m.x===3&&m.y===2); if (s11){passed++;} else {failed++; log.push('T2 failed');}
+    let b3 = empty.map(r=>r.slice()); b3[2][2] = {p:0,h:2}; b3[2][3] = {p:0,h:1};
+    let s21 = computeLegalMovesForTest(b3,S,0,2,2).every(m=>!(m.type==='stack')); if (s21){passed++;} else {failed++; log.push('T3 failed');}
+    let b4 = empty.map(r=>r.slice()); b4[2][2] = {p:0,h:2}; b4[2][3] = {p:0,h:2};
+    let s22 = computeLegalMovesForTest(b4,S,0,2,2).every(m=>!(m.type==='stack')); if (s22){passed++;} else {failed++; log.push('T4 failed');}
+    const summary = `Dev Tests → passed: ${passed}, failed: ${failed}`;
+    console.log(summary); if (log.length) console.warn('\\n'+log.join('\\n'));
+    testEl.textContent = (failed===0) ? `${summary} ✅` : `${summary} ⚠️ （詳細はコンソール）`;
+  }
+
+  // ======= 初期起動 =======
+  initBoard();
+  updateStatus('モードとプレイヤー割当を選んで「新しく始める」を押してください（不足はAIで補充されます）');
+  runDevTests();
+})();
+</script>
+<script src="./client-net.js"></script>
+</body>
+</html>
