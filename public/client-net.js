@@ -1,11 +1,13 @@
-// public/client-net.js  — EndLine オンライン最終版
+// public/client-net.js  — EndLine オンライン改定版（手番ガード & ack 対応）
 (() => {
   // ===== Socket.io =====
   const socket = io();
 
   // ====== クライアント側で保持するサーバ状態 ======
   let ST = { size: 8, playerCount: 4, current: 0, board: [] }; // server truth mirror
-  let SEL = null; // {x,y} 選択中セル（オンライン専用）
+  let SEL = null;           // {x,y} 選択中セル（オンライン専用）
+  let mySeat = null;        // 0:北,1:南,2:西,3:東（サーバ応答で確定）
+  let roomId = null;        // 現在のルームID
 
   // ====== 表示用カラー/チーム記号（index.htmlに合わせる） ======
   const PLAYER_COLORS = [
@@ -88,7 +90,7 @@
         cell.className = 'cell' + (((x+y)%2)?' alt':'');
         cell.dataset.x = x; cell.dataset.y = y;
 
-        // ゴール辺の発光（見た目合わせ）
+        // ゴール辺の発光
         const glows=[]; let overlaps=0;
         const cN = hexToRgba(PLAYER_COLORS[0].color);
         const cS = hexToRgba(PLAYER_COLORS[1].color);
@@ -142,16 +144,18 @@
 
   // ====== オンライン時は index.html 側 onCellClick をキャンセル（競合防止） ======
   document.addEventListener('click', (e)=>{
-    if (!window.__ONLINE_ROOM_ID) return;
+    if (!roomId) return;
     if (e.target.closest('#board .cell')) {
       e.stopPropagation();  // index.html の onCellClick に届かせない
-      // e.preventDefault(); // （必要なら）
     }
   }, true);
 
   // ====== 盤クリック → サーバへ着手送信 ======
   boardEl.addEventListener('click', (e)=>{
-    if (!window.__ONLINE_ROOM_ID) return;
+    if (!roomId) return;                      // オンラインでなければ無視
+    if (mySeat === null) return;              // まだ席が確定していない
+    if (ST.current !== mySeat) return;        // 自分の手番ではない
+
     const cell = e.target.closest('.cell'); if (!cell) return;
     const x = +cell.dataset.x, y = +cell.dataset.y;
 
@@ -162,7 +166,7 @@
       if (!mv){ SEL=null; renderOnline(); return; }
 
       socket.emit('game:move', {
-        roomId: window.__ONLINE_ROOM_ID,
+        roomId,
         move: { fx:SEL.x, fy:SEL.y, tx:x, ty:y, type: mv.type }
       });
       SEL = null; // 選択解除（結果はサーバから届く）
@@ -174,41 +178,117 @@
     if (here && here.p===ST.current){ SEL = {x,y}; renderOnline(); }
   }, {passive:true});
 
-  // ====== サーバ同期 ======
-  socket.on('room:update', ({ id, mode, state })=>{
-    window.__ONLINE_ROOM_ID = id;
-    $('labRoom').textContent = `Room: ${id} / Mode: ${mode}`;
-    ST = {
-      size: state.size,
-      playerCount: state.playerCount,
-      current: state.current,
-      board: state.board.map(r=>r.map(c=>c?{...c}:null))
-    };
-    renderOnline();
-
-    // ステータス表示（index.htmlのラベルを借用）
-    const statusEl = document.getElementById('status');
-    if (statusEl){
-      const turnTeam = (TEAM_BADGE(ST.current)==='A')?'チームA（北+南）':'チームB（西+東）';
-      statusEl.textContent = (ST.playerCount===4)
-        ? `手番：${turnTeam}`
-        : `手番：${PLAYER_COLORS[ST.current].name}（1v1）`;
+  // ====== 受信ユーティリティ ======
+  function applyStateFromServer(payload){
+    // payload: { id, mode, state, seat? }
+    if (payload.id) roomId = payload.id;
+    if (typeof payload.seat === 'number') {
+      mySeat = payload.seat;
+      window.mySeat = mySeat; // index.html 側から参照したい場合のために公開
     }
-  });
 
+    const { state } = payload;
+    if (state){
+      ST = {
+        size: state.size,
+        playerCount: state.playerCount,
+        current: state.current,
+        board: state.board.map(r=>r.map(c=>c?{...c}:null))
+      };
+      renderOnline();
+
+      // ステータス表示（index.htmlのラベルを借用）
+      const statusEl = document.getElementById('status');
+      if (statusEl){
+        const turnTeam = (TEAM_BADGE(ST.current)==='A')?'チームA（北+南）':'チームB（西+東）';
+        statusEl.textContent = (ST.playerCount===4)
+          ? `手番：${turnTeam}（あなたの席: ${mySeat ?? '-' }）`
+          : `手番：${PLAYER_COLORS[ST.current].name}（1v1）`;
+      }
+    }
+
+    // UIラベル
+    const lab = $('labRoom');
+    if (lab && roomId) lab.textContent = `Room: ${roomId}${payload.mode?` / Mode: ${payload.mode}`:''}${mySeat!==null?` / Your seat: ${mySeat}`:''}`;
+    // index.html 側から参照したい場合のため公開
+    window.__ONLINE_ROOM_ID = roomId;
+  }
+
+  // ====== サーバ同期（片道イベント & ack の両対応） ======
+  socket.on('room:update', (data)=> applyStateFromServer(data));
   socket.on('room:created', ({id})=>{
-    window.__ONLINE_ROOM_ID = id;
+    roomId = id;
     $('inpRoom').value = id;
     $('labRoom').textContent = `Room: ${id}`;
+    window.__ONLINE_ROOM_ID = id;
   });
 
-  // ====== ロビー操作 ======
-  $('btnCreate').onclick     = ()=> socket.emit('room:create', { mode: $('selMode').value, name: $('inpName').value || 'Player' });
-  $('btnJoin').onclick       = ()=> socket.emit('room:join',   { roomId: $('inpRoom').value.trim(), name: $('inpName').value || 'Player' });
-  $('btnSit').onclick        = ()=> socket.emit('room:sit',    { roomId: $('inpRoom').value.trim(), seatIndex: +$('selSeat').value, asAI:false, name: $('inpName').value || 'Player' });
-  $('btnSitAI').onclick      = ()=> socket.emit('room:sit',    { roomId: $('inpRoom').value.trim(), seatIndex: +$('selSeat').value, asAI:true });
-  $('btnLeaveSeat').onclick  = ()=> socket.emit('room:leaveSeat', { roomId: $('inpRoom').value.trim(), seatIndex: +$('selSeat').value });
-  $('btnStartOnline').onclick= ()=> socket.emit('game:start',  { roomId: $('inpRoom').value.trim(), mode: $('selMode').value });
+  // ====== ロビー操作（ack で受け取れる場合は反映） ======
+  $('btnCreate').onclick = ()=>{
+    const payload = { mode: $('selMode').value, name: $('inpName').value || 'Player' };
+    socket.emit('room:create', payload, (ack)=>{
+      if (ack && ack.id) {
+        $('inpRoom').value = ack.id;
+        applyStateFromServer({ id: ack.id, mode: ack.mode, state: ack.snapshot, seat: ack.seat });
+      }
+    });
+  };
+
+  $('btnJoin').onclick = ()=>{
+    const payload = { roomId: $('inpRoom').value.trim(), name: $('inpName').value || 'Player' };
+    socket.emit('room:join', payload, (ack)=>{
+      if (ack && (ack.id || ack.roomId)) {
+        applyStateFromServer({ id: ack.id || ack.roomId, mode: ack.mode, state: ack.snapshot, seat: ack.seat });
+      }
+    });
+  };
+
+  $('btnSit').onclick = ()=>{
+    const payload = { roomId: $('inpRoom').value.trim(), seatIndex: +$('selSeat').value, asAI:false, name: $('inpName').value || 'Player' };
+    socket.emit('room:sit', payload, (ack)=>{
+      if (ack && typeof ack.seat === 'number') {
+        mySeat = ack.seat;
+        window.mySeat = mySeat;
+        if (ack.state) applyStateFromServer({ id: roomId, state: ack.state, seat: mySeat });
+        const lab = $('labRoom'); if (lab) lab.textContent = `Room: ${roomId} / Your seat: ${mySeat}`;
+      }
+    });
+  };
+
+  $('btnSitAI').onclick = ()=>{
+    const payload = { roomId: $('inpRoom').value.trim(), seatIndex: +$('selSeat').value, asAI:true };
+    socket.emit('room:sit', payload, (ack)=>{
+      if (ack && ack.state) applyStateFromServer({ id: roomId, state: ack.state });
+    });
+  };
+
+  $('btnLeaveSeat').onclick = ()=>{
+    const payload = { roomId: $('inpRoom').value.trim(), seatIndex: +$('selSeat').value };
+    socket.emit('room:leaveSeat', payload, (ack)=>{
+      if (ack && ack.state) applyStateFromServer({ id: roomId, state: ack.state });
+      if (mySeat === +$('selSeat').value){ mySeat = null; window.mySeat = null; }
+      const lab = $('labRoom'); if (lab && roomId) lab.textContent = `Room: ${roomId}${mySeat!==null?` / Your seat: ${mySeat}`:''}`;
+    });
+  };
+
+  $('btnStartOnline').onclick = ()=>{
+    const payload = { roomId: $('inpRoom').value.trim(), mode: $('selMode').value };
+    socket.emit('game:start', payload, (ack)=>{
+      if (ack && ack.state) applyStateFromServer({ id: roomId, mode: ack.mode, state: ack.state, seat: ack.seat });
+    });
+  };
+
+  // ====== 接続ログ（任意） ======
+  socket.on('connect', () => console.log('socket connected', socket.id));
+  socket.on('disconnect', () => console.log('socket disconnected'));
+
+  // ====== URLクエリ ?room=XXXX で自動Join（任意）
+  const params = new URLSearchParams(location.search);
+  const autoRoom = params.get('room');
+  if (autoRoom){
+    $('inpRoom').value = autoRoom;
+    $('btnJoin').click();
+  }
 
   // 初期はローカル表示のまま。オンラインイベントを受け取ったら renderOnline() が上書きする。
 })();

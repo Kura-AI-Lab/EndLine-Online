@@ -350,6 +350,15 @@
   // ======= 入力 =======
   function onCellClick(e){
     if (aiThinking) return;
+
+     // ★オンライン中は Human/AI セレクタではなく「自分の手番」かで判定
+  if (window.roomId) {
+    if (typeof window.mySeat !== 'number') return; // まだ着席未確定
+    if (current !== window.mySeat) return;         // 自分の番でない
+  } else {
+    // オフライン時だけ従来の Human/AI 判定を使う
+    if (IS_AI[current]) return;
+  }
     if (IS_AI[current]) return; // AIのターンは入力無効
     const x = +e.currentTarget.dataset.x, y = +e.currentTarget.dataset.y;
     const cell = at(x,y);
@@ -403,6 +412,27 @@ return;
   }
 
   // ======= スナップショット（AIへ渡す） =======
+
+  // ★サーバから届いた最新状態を盤面に反映（client-net.js から呼ぶ）
+window.hydrateFromServer = function(state){
+  if (!state) return;
+  size        = state.size;
+  playerCount = state.playerCount;
+  current     = state.current;
+  board       = state.board.map(row => row.map(c => c ? {...c} : null));
+  eliminated  = new Set(state.eliminated || []);
+  selected    = null;
+  render();
+  updateStatus();
+};
+
+// ★ネットワークのコンテキスト（接続情報）を受け取るための小API（任意）
+window.setRoomContext = function({ socket, roomId, mySeat }){
+  window.socket = socket;
+  window.roomId = roomId;
+  window.mySeat = mySeat; // 0:北, 1:南, 2:西, 3:東
+};
+
   function snapshotState(){
     return { size, playerCount, current, board: board.map(row=>row.map(c=>c?{p:c.p,h:c.h}:null)) };
   }
@@ -586,6 +616,7 @@ return;
   }
 
   function maybeStartAITurn(){
+    if (window.roomId) return;
     if (eliminated.has(current)) return;
     if (!IS_AI[current]) return;
     ensureWorker(); aiThinking = true;
@@ -632,6 +663,10 @@ return;
   });
 
   document.getElementById('start').addEventListener('click', () => {
+    if (window.roomId){
+    updateStatus('オンライン対局中はホスト（サーバ）側から開始されます。');
+    return;
+  }
     const sel = document.getElementById('mode').value;
     if (sel === '2v2_8x8'){ size = 8; playerCount = 4; piecesPerSide = 4; mode = 'team'; }
     else { size = 6; playerCount = 2; piecesPerSide = 4; mode = 'ffa'; }
