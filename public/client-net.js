@@ -1,4 +1,4 @@
-// public/client-net.js — 全員操作 / AI同期 / 個別90°回転 / プレイヤー割当同期対応
+// public/client-net.js — 全員操作 / AI同期 / 個別90°回転 / プレイヤー割当同期（最終）
 (() => {
   const socket = io();
 
@@ -6,6 +6,7 @@
   let SEL = null;
   let roomId = null;
   let rotation = 0;
+  let APPLYING_SYNC = false;   // ← UIへ書き戻し中フラグ（change抑止）
 
   const PLAYER_COLORS = [
     { name: 'North (P1)', color: '#6cc4ff' },
@@ -19,7 +20,7 @@
   const $ = id => document.getElementById(id);
   const boardEl = document.getElementById('board');
 
-  // ---- UIバー（上部固定） ----
+  // ---- 上部バー ----
   const bar = document.createElement('div');
   bar.style.cssText = 'position:sticky;top:0;z-index:999;background:#0b0f1c;border-bottom:1px solid #222842;padding:8px;display:flex;gap:8px;flex-wrap:wrap';
   bar.innerHTML = `
@@ -96,7 +97,6 @@
       }
     }
 
-    // ハイライト
     if(SEL){
       const {x,y}=SEL;
       const {x:rx,y:ry}=rot(x,y);
@@ -127,6 +127,47 @@
     if(piece && piece.p===ST.current){ SEL={x,y}; render(); }
   });
 
+  // ---- UI: プレイヤー割当セレクト → サーバへ送信
+  document.addEventListener('change',e=>{
+    const sel=e.target.closest('.player-ctrl'); // data-player="0..3", value: "human"|"ai"
+    if(!sel || !roomId) return;
+    if(APPLYING_SYNC) return; // サーバからの反映中は無視
+    const p=Number(sel.dataset.player);
+    if(Number.isNaN(p)) return;
+    socket.emit('room:setAI',{roomId,player:p,value:(sel.value==='ai')});
+  });
+
+  // ---- 他クライアントの変更を自分のUIへ反映
+  function syncPlayerSelectorsFromState(){
+    APPLYING_SYNC = true;
+    try{
+      // 1) 新実装（推奨）: .player-ctrl
+      const nodes = document.querySelectorAll('.player-ctrl[data-player]');
+      nodes.forEach(node=>{
+        const p = Number(node.dataset.player);
+        if(p>=0 && p<4){
+          const want = ST.ai[p] ? 'ai' : 'human';
+          if (node.value !== want) node.value = want;
+        }
+        // 2v2/1v1で無効化制御（任意）
+        const enabled = (p < ST.playerCount);
+        node.disabled = !enabled;
+      });
+
+      // 2) 旧UI互換: #selP0..#selP3（値が "AI"/"Human"）
+      for(let p=0;p<4;p++){
+        const legacy = document.getElementById(`selP${p}`);
+        if(legacy){
+          const want = ST.ai[p] ? 'AI' : 'Human';
+          if (legacy.value !== want) legacy.value = want;
+          legacy.disabled = (p >= ST.playerCount);
+        }
+      }
+    } finally {
+      APPLYING_SYNC = false;
+    }
+  }
+
   // ---- 状態受信 ----
   function applyState({id,state}){
     if(id) roomId=id;
@@ -140,11 +181,19 @@
       };
       SEL=null;
       render();
-      $('labRoom').textContent=`Room:${roomId}`;
+      syncPlayerSelectorsFromState();   // ★ ここでUIへ反映
+
+      $('labRoom').textContent = roomId ? `Room:${roomId}` : '';
+      const statusEl = document.getElementById('status');
+      if(statusEl){
+        const team = (TEAM_BADGE(ST.current)==='A')?'チームA（北+南）':'チームB（西+東）';
+        statusEl.textContent = (ST.playerCount===4)? `手番：${team}` : `手番：${PLAYER_COLORS[ST.current].name}`;
+      }
     }
     window.__ONLINE_ROOM_ID=roomId;
   }
 
+  // ---- サーバイベント ----
   socket.on('room:update',applyState);
   socket.on('room:created',({id})=>{
     roomId=id;
@@ -159,15 +208,5 @@
   $('btnStartOnline').onclick=()=>socket.emit('game:start',{roomId:$('inpRoom').value.trim(),mode:$('selMode').value});
   $('btnToggleAI').onclick=()=>socket.emit('room:toggleAI',{roomId});
   $('btnRotate').onclick=()=>{rotation=(rotation+1)&3;render();};
-
-  // ---- ★ プレイヤー割当セレクト → AI状態同期 ----
-  document.addEventListener('change',e=>{
-    const sel=e.target.closest('.player-ctrl');
-    if(!sel) return;
-    if(!roomId) return;
-    const p=Number(sel.dataset.player);
-    const value=(sel.value==='ai');
-    socket.emit('room:setAI',{roomId,player:p,value});
-  });
 
 })();
