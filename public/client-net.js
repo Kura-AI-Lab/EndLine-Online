@@ -1,11 +1,11 @@
-// public/client-net.js — 全員操作 / AI同期 / 個別90°回転
+// public/client-net.js — 全員操作 / AI同期 / 個別90°回転（room:createdイベント対応）
 (() => {
   const socket = io();
 
   let ST = { size: 8, playerCount: 4, current: 0, board: [], ai:[false,false,false,false] };
   let SEL = null;
   let roomId = null;
-  let rotation = 0; // 0,1,2,3 → 0°, 90°, 180°, 270°
+  let rotation = 0; // 0,1,2,3 → 0°,90°,180°,270°
 
   const PLAYER_COLORS = [
     { name: 'North (P1)', color: '#6cc4ff' },
@@ -57,7 +57,7 @@
       if(!t) out.push({x:nx,y:ny,type:'move'});
       else if(t.p===p){
         const th=t.h||1;
-        if(h===1 && th===1) out.push({x:nx,y:ny,type:'stack'});
+        if(h===1 && th===1 && h+th<=HEIGHT_CAP) out.push({x:nx,y:ny,type:'stack'});
       }else{
         const oh=t.h||1;
         if(oh<=h) out.push({x:nx,y:ny,type:'capture'});
@@ -92,13 +92,9 @@
           const dot = document.createElement('div');
           dot.className='dot';
           dot.style.background = PLAYER_COLORS[piece.p].color;
-          const label = document.createElement('span');
-          label.textContent = piece.h || 1;
-          dot.appendChild(label);
-          const b = document.createElement('span');
-          const mark = TEAM_BADGE(piece.p);
-          b.className = `badge ${mark}`; b.textContent = mark;
-          dot.appendChild(b);
+          const label = document.createElement('span'); label.textContent = piece.h || 1; dot.appendChild(label);
+          const b = document.createElement('span'); const mark = TEAM_BADGE(piece.p);
+          b.className = `badge ${mark}`; b.textContent = mark; dot.appendChild(b);
           cell.appendChild(dot);
         }
 
@@ -106,7 +102,6 @@
       }
     }
 
-    // highlight
     if(SEL){
       const {x,y} = SEL;
       const {x:rx,y:ry} = applyRotation(x,y);
@@ -123,54 +118,66 @@
     }
   }
 
-  // ---- 全員手番操作可能。ただし AI の手番は入力禁止 ----
+  // --- 入力（全員可。AI手番はサーバに任せるので人間入力禁止） ---
   boardEl.addEventListener('click',(e)=>{
     if (!roomId) return;
-    if (ST.ai && ST.ai[ST.current]) return; // AIの手番は動かせない
+    if (ST.ai && ST.ai[ST.current]) return;
 
     const cell=e.target.closest('.cell'); if(!cell) return;
     const x=+cell.dataset.x, y=+cell.dataset.y;
 
     if(SEL){
       const mv = legalFor(ST.current,SEL.x,SEL.y).find(m=>m.x===x && m.y===y);
-      if(mv){
-        socket.emit('game:move', { roomId, move:{fx:SEL.x,fy:SEL.y,tx:x,ty:y,type:mv.type} });
-      }
+      if(mv) socket.emit('game:move', { roomId, move:{fx:SEL.x,fy:SEL.y,tx:x,ty:y,type:mv.type} });
       SEL=null; return;
     }
-
     const piece = at(x,y);
     if(piece && piece.p===ST.current){ SEL={x,y}; renderOnline(); }
   });
 
   function applyState(payload){
-    if(payload.id) roomId = payload.id;
-    const { state } = payload;
-    if(state){
+    if(payload?.id) roomId = payload.id;
+    const st = payload?.state;
+    if(st){
       ST = {
-        size: state.size,
-        playerCount: state.playerCount,
-        current: state.current,
-        board: state.board.map(r=>r.map(c=>c?{...c}:null)),
-        ai: state.ai || [false,false,false,false]
+        size: st.size,
+        playerCount: st.playerCount,
+        current: st.current,
+        board: st.board.map(r=>r.map(c=>c?{...c}:null)),
+        ai: st.ai || [false,false,false,false]
       };
+      SEL=null;
       renderOnline();
       const statusEl = document.getElementById('status');
       if(statusEl){
         const turnTeam = (TEAM_BADGE(ST.current)==='A')?'チームA（北+南）':'チームB（西+東）';
-        statusEl.textContent = (ST.playerCount===4)? `手番：${turnTeam}` : `手番：${PLAYER_COLORS[ST.current].name}`;
+        statusEl.textContent = (ST.playerCount===4) ? `手番：${turnTeam}` : `手番：${PLAYER_COLORS[ST.current].name}`;
       }
     }
     $('labRoom').textContent = roomId ? `Room:${roomId}` : '';
+    window.__ONLINE_ROOM_ID = roomId;
   }
 
+  // ===== サーバイベント =====
   socket.on('room:update', applyState);
 
-  $('btnCreate').onclick = ()=> socket.emit('room:create',{mode:$('selMode').value,name:$('inpName').value}, applyState);
-  $('btnJoin').onclick   = ()=> socket.emit('room:join',  {roomId:$('inpRoom').value,name:$('inpName').value}, applyState);
-  $('btnStartOnline').onclick = ()=> socket.emit('game:start',{roomId:$('inpRoom').value,mode:$('selMode').value}, applyState);
-  $('btnToggleAI').onclick    = ()=> socket.emit('room:toggleAI',{roomId});
-  $('btnRotate').onclick      = ()=>{ rotation=(rotation+1)&3; renderOnline(); };
+  // ★ これが今回の同期不全の原因対策：Create はイベントで返る
+  socket.on('room:created', ({ id }) => {
+    roomId = id;
+    $('inpRoom').value = id;               // 入力欄を作成IDに差し替え
+    $('labRoom').textContent = `Room:${id}`;
+    window.__ONLINE_ROOM_ID = id;
+    // 必要なら自動 join にしたい場合は次の1行を有効化：
+    // socket.emit('room:join', { roomId: id });
+  });
 
-  socket.on('connect',()=>console.log("connected:",socket.id));
+  // ===== ロビー操作（ack を待たない。イベントで state が届く） =====
+  $('btnCreate').onclick      = ()=> socket.emit('room:create', { mode: $('selMode').value, name: $('inpName').value || 'Player' });
+  $('btnJoin').onclick        = ()=> socket.emit('room:join',   { roomId: $('inpRoom').value.trim(), name: $('inpName').value || 'Player' });
+  $('btnStartOnline').onclick = ()=> socket.emit('game:start',  { roomId: $('inpRoom').value.trim(), mode: $('selMode').value });
+
+  $('btnToggleAI').onclick    = ()=> { if(roomId) socket.emit('room:toggleAI', { roomId }); };
+  $('btnRotate').onclick      = ()=> { rotation=(rotation+1)&3; renderOnline(); };
+
+  socket.on('connect',()=>console.log('connected', socket.id));
 })();
