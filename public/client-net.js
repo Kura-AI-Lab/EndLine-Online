@@ -1,8 +1,8 @@
-// public/client-net.js — オンラインはHuman固定 / 個別90°回転 / シンプル同期
+// public/client-net.js — オンラインはHuman固定 / 個別90°回転 / Leave対応
 (() => {
   const socket = io();
 
-  let ST = { size: 8, playerCount: 4, current: 0, board: [] }; // ← aiなし
+  let ST = { size: 8, playerCount: 4, current: 0, board: [] }; // ai状態は持たない
   let SEL = null;
   let roomId = null;
   let rotation = 0; // 0,1,2,3 → 0°,90°,180°,270°
@@ -30,6 +30,7 @@
       <option value="1v1_6x6">6x6 1v1</option>
     </select>
     <button id="btnStartOnline">Start</button>
+    <button id="btnLeave">Leave</button>
 
     <button id="btnRotate">盤面回転</button>
     <span id="labRoom" style="color:#9aa3b2"></span>
@@ -133,6 +134,28 @@
     if(piece && piece.p===ST.current){ SEL={x,y}; renderOnline(); }
   });
 
+  // === 左パネルのAIセレクタ制御（オンライン時は無効化、オフラインに戻ったら復帰） ===
+  function disableSelectorsForOnline(){
+    for (let p=0; p<4; p++){
+      const sel = document.getElementById(`selP${p}`);
+      if (sel){ sel.value = 'Human'; sel.disabled = true; }
+    }
+    const btnFill = document.getElementById('btnFill');
+    const btnSwap = document.getElementById('btnSwap');
+    if (btnFill) btnFill.disabled = true;
+    if (btnSwap) btnSwap.disabled = true;
+  }
+  function enableSelectorsForOffline(){
+    for (let p=0; p<4; p++){
+      const sel = document.getElementById(`selP${p}`);
+      if (sel){ sel.disabled = false; } // 値はそのまま（オフラインでAIを使える）
+    }
+    const btnFill = document.getElementById('btnFill');
+    const btnSwap = document.getElementById('btnSwap');
+    if (btnFill) btnFill.disabled = false;
+    if (btnSwap) btnSwap.disabled = false;
+  }
+
   // === 状態受信 ===
   function applyState(payload){
     if(payload?.id) roomId = payload.id;
@@ -147,14 +170,8 @@
       SEL=null;
       renderOnline();
 
-      // オンライン時は左パネルのAIセレクタを全て無効化（Human固定の見た目に）
-      for (let p=0; p<4; p++){
-        const legacy = document.getElementById(`selP${p}`);
-        if (legacy){
-          legacy.value = 'Human';
-          legacy.disabled = true;
-        }
-      }
+      // オンライン時はAIセレクタを無効化（Human固定の見た目へ）
+      disableSelectorsForOnline();
 
       const statusEl = document.getElementById('status');
       if(statusEl){
@@ -168,13 +185,13 @@
 
   socket.on('room:update', applyState);
 
+  // Create の応答
   socket.on('room:created', ({ id }) => {
     roomId = id;
     $('inpRoom').value = id;
     $('labRoom').textContent = `Room:${id}`;
     window.__ONLINE_ROOM_ID = id;
-    // 必要なら自動Join：
-    // socket.emit('room:join', { roomId: id });
+    // 作成者はserver側で自動join済み。状態はroom:updateで届く。
   });
 
   // === ロビー操作 ===
@@ -182,7 +199,21 @@
   $('btnJoin').onclick        = ()=> socket.emit('room:join',   { roomId: $('inpRoom').value.trim() });
   $('btnStartOnline').onclick = ()=> socket.emit('game:start',  { roomId: $('inpRoom').value.trim(), mode: $('selMode').value });
 
-  $('btnRotate').onclick      = ()=> { rotation=(rotation+1)&3; renderOnline(); };
+  $('btnLeave').onclick = () => {
+    if (!roomId) return;
+    socket.emit('room:leave', { roomId });
+    // ローカルをオフライン状態に戻す（盤はクリア・セレクタ復帰）
+    roomId = null;
+    window.__ONLINE_ROOM_ID = null;
+    $('labRoom').textContent = '';
+    ST = { size: 0, playerCount: 0, current: 0, board: [] };
+    boardEl.innerHTML = '';
+    SEL = null;
+    enableSelectorsForOffline();
+    console.log('Left room.');
+  };
+
+  $('btnRotate').onclick      = ()=> { rotation=(rotation+1)&3; if(roomId) renderOnline(); };
 
   socket.on('connect',()=>console.log('connected', socket.id));
 })();

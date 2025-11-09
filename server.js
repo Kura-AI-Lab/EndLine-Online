@@ -1,15 +1,17 @@
-// server.js — オンラインは全員Human固定（AIなし）
+// server.js — オンラインは全員Human固定（AIなし）＋ Leave 対応
 const express = require('express');
 const http = require('http');
 const cors = require('cors');
 const { Server } = require('socket.io');
 
-const { rules } = require('./ai-core-node'); // ← searchBestMoveは使わない
+// 盤ルールのみ使用（AIは使わない）
+const { rules } = require('./ai-core-node');
 
 const app = express();
 app.use(cors());
 app.use(express.static('public'));
 
+// health for uptime
 app.get('/health', (req, res) => res.status(200).send('ok'));
 
 const server = http.createServer(app);
@@ -37,7 +39,7 @@ function initState(mode) {
   }
   if (playerCount >= 3) placeLine(board, size, 2, 0, false);
   if (playerCount >= 4) placeLine(board, size, 3, size - 1, false);
-  return { size, playerCount, current: 0, board }; // ← ai配列なし
+  return { size, playerCount, current: 0, board };
 }
 
 // ---- ルーム ----
@@ -57,14 +59,18 @@ function broadcast(room) {
 // ---- Socket ----
 io.on('connection', (socket) => {
 
+  // ルーム作成（作成者は自動でjoin）
   socket.on('room:create', ({ mode = '2v2_8x8' }) => {
     const id = Math.random().toString(36).slice(2,8).toUpperCase();
     const room = { id, mode, state: initState(mode) };
     rooms.set(id, room);
     socket.join(id);
     socket.emit('room:created', { id });
+    // 作成直後も状態を配信（作成者は既に部屋内）
+    broadcast(room);
   });
 
+  // 参加
   socket.on('room:join', ({ roomId }) => {
     const room = rooms.get(roomId);
     if (!room) return;
@@ -72,6 +78,13 @@ io.on('connection', (socket) => {
     broadcast(room);
   });
 
+  // 離脱（Leave）
+  socket.on('room:leave', ({ roomId }) => {
+    socket.leave(roomId);
+    // ここでは状態変更やブロードキャストは不要（メンバー表示を作るならここでやる）
+  });
+
+  // 新規ゲーム開始（盤初期化）
   socket.on('game:start', ({ roomId, mode }) => {
     const room = rooms.get(roomId);
     if (!room) return;
@@ -94,10 +107,15 @@ io.on('connection', (socket) => {
     );
     if (!ok) return;
 
+    // 適用して配信
     room.state = rules.applyMove(room.state, ok);
     broadcast(room);
   });
 
+  // 切断時：ルームから抜ける
+  socket.on('disconnect', () => {
+    // ここではroomIdの保持をしていないので、joinしていた全ルームから自動的に離脱される扱いでOK
+  });
 });
 
 const port = process.env.PORT || 3000;
