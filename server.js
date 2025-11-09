@@ -4,7 +4,7 @@ const http = require('http');
 const cors = require('cors');
 const { Server } = require('socket.io');
 const { searchBestMove, rules } = require('./ai-core');
-
+const { rules, searchBestMove } = require('./ai-core-node');
 const app = express();
 app.use(cors());
 app.use(express.static('public'));

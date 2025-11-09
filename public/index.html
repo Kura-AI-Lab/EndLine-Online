@@ -360,11 +360,24 @@
       const s = selected; if (!inBounds(s.x,s.y)) { selected=null; render(); return; }
       const piece = at(s.x,s.y); if (!piece || piece.p!==current){ selected=null; render(); return; }
       const legal = legalMovesFor(current, s.x, s.y); const chosen = legal.find(m=>m.x===x && m.y===y);
-      if (!chosen){ selected = null; render(); return; }
+      // 現在の選択から合法な行き先がクリックされた
+if (!chosen){ selected = null; render(); return; }
 
-      if (executeMoveDirect({fx:s.x,fy:s.y,tx:x,ty:y,type:chosen.type})) return;
-      checkEliminations(); nextPlayer(); selected=null; render(); updateStatus(); maybeStartAITurn();
-      return;
+// ★オンラインルームがあるならサーバーへ送って待つ（ローカル適用しない）
+if (window.socket && window.roomId){
+  window.socket.emit('game:move', {
+    roomId: window.roomId,
+    move: { fx:s.x, fy:s.y, tx:x, ty:y, type:chosen.type }
+  });
+  selected = null;
+  return; // サーバーの room:update で盤面が来る
+}
+
+// （オフライン）従来どおりローカル適用
+if (executeMoveDirect({fx:s.x,fy:s.y,tx:x,ty:y,type:chosen.type})) return;
+checkEliminations(); nextPlayer(); selected=null; render(); updateStatus(); maybeStartAITurn();
+return;
+
     }
     if (cell && cell.p===current){ selected = {x,y}; render(); }
   }

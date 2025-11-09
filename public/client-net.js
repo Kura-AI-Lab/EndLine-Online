@@ -1,8 +1,49 @@
-// public/client-net.js
+// public/client-net.js  — EndLine オンライン最終版
 (() => {
+  // ===== Socket.io =====
   const socket = io();
 
-  // --- ミニロビーUI（作成/参加/着席/AI/開始） ---
+  // ====== クライアント側で保持するサーバ状態 ======
+  let ST = { size: 8, playerCount: 4, current: 0, board: [] }; // server truth mirror
+  let SEL = null; // {x,y} 選択中セル（オンライン専用）
+
+  // ====== 表示用カラー/チーム記号（index.htmlに合わせる） ======
+  const PLAYER_COLORS = [
+    { name: 'North (P1)', color: '#6cc4ff' },
+    { name: 'South (P2)', color: '#ffd166' },
+    { name: 'West (P3)',  color: '#8bd17c' },
+    { name: 'East (P4)',  color: '#ff8fa3' },
+  ];
+  const TEAM_BADGE = (p)=> (p===0||p===1) ? 'A' : 'B';
+  const HEIGHT_CAP = 2;
+
+  // ====== ルール（最小限：合法手の判定だけ） ======
+  const inB = (s,x,y)=> x>=0 && x<s && y>=0 && y<s;
+  const at  = (x,y)=> ST.board?.[y]?.[x] || null;
+
+  function legalFor(p,x,y){
+    const s=ST.size, pc=at(x,y); if(!pc) return [];
+    const h=pc.h||1;
+    const d4=[{dx:1,dy:0},{dx:-1,dy:0},{dx:0,dy:1},{dx:0,dy:-1}],
+          dg=[{dx:1,dy:1},{dx:1,dy:-1},{dx:-1,dy:1},{dx:-1,dy:-1}],
+          ds=(h>=2)?d4:d4.concat(dg);
+    const out=[];
+    for(const v of ds){
+      const nx=x+v.dx, ny=y+v.dy; if(!inB(s,nx,ny)) continue;
+      const t=at(nx,ny);
+      if(!t) out.push({x:nx,y:ny,type:'move'});
+      else if(t.p===p){
+        const th=t.h||1;
+        if(h===1 && th===1 && h+th<=HEIGHT_CAP) out.push({x:nx,y:ny,type:'stack'});
+      }else{
+        const oh=t.h||1;
+        if(oh<=h) out.push({x:nx,y:ny,type:'capture'});
+      }
+    }
+    return out;
+  }
+
+  // ====== UI上部：簡易ロビー ======
   const bar = document.createElement('div');
   bar.style.cssText = 'position:sticky;top:0;z-index:9999;background:#0b0f1c;border-bottom:1px solid #222842;padding:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap';
   bar.innerHTML = `
@@ -27,57 +68,147 @@
   document.body.prepend(bar);
   const $ = id => document.getElementById(id);
 
-  function sendMoveToServer(m){
-    if (!window.__ONLINE_ROOM_ID) return;
-    socket.emit('game:move', { roomId: window.__ONLINE_ROOM_ID, move: m });
+  // ====== 盤面描画（オンライン専用レンダラ：index.htmlの内部状態に依存しない） ======
+  const boardEl = document.getElementById('board');
+
+  function hexToRgba(hex, a=0.55){
+    const h = hex.replace('#',''); const n = parseInt(h,16);
+    return `rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`;
   }
 
-  // 盤クリックを「サーバーへ手を送る」仕様に付け替え
-  const boardEl = document.getElementById('board');
-  const newBoard = boardEl.cloneNode(true);
-  boardEl.parentNode.replaceChild(newBoard, boardEl);
+  function renderOnline(){
+    if (!boardEl) return;
+    const size = ST.size;
+    boardEl.style.gridTemplateColumns = `repeat(${size}, 1fr)`;
+    boardEl.innerHTML = '';
 
-  newBoard.addEventListener('click', (e)=>{
-    if (!window.__ONLINE_ROOM_ID) return;                // オフライン時は無視
-    if (window.aiThinking) return;
-    if (window.IS_AI && window.IS_AI[window.current]) return;
+    for (let y=0;y<size;y++){
+      for (let x=0;x<size;x++){
+        const cell = document.createElement('div');
+        cell.className = 'cell' + (((x+y)%2)?' alt':'');
+        cell.dataset.x = x; cell.dataset.y = y;
 
+        // ゴール辺の発光（見た目合わせ）
+        const glows=[]; let overlaps=0;
+        const cN = hexToRgba(PLAYER_COLORS[0].color);
+        const cS = hexToRgba(PLAYER_COLORS[1].color);
+        const cW = hexToRgba(PLAYER_COLORS[2].color);
+        const cE = hexToRgba(PLAYER_COLORS[3].color);
+        if (y === size - 1) { glows.push(`inset 0 -6px 0 ${cN}`); overlaps++; }
+        if (y === 0)        { glows.push(`inset 0 6px 0 ${cS}`);  overlaps++; }
+        if (x === size - 1) { glows.push(`inset -6px 0 0 ${cW}`); overlaps++; }
+        if (x === 0)        { glows.push(`inset 6px 0 0 ${cE}`);  overlaps++; }
+        if (overlaps>=2){ glows.push(`0 0 12px rgba(255,255,255,.35)`,`0 0 18px rgba(255,255,255,.18)`); }
+        cell.style.boxShadow = ['inset 0 0 0 1px rgba(255,255,255,.03)',...glows].join(', ');
+
+        // 駒
+        const piece = at(x,y);
+        if (piece){
+          const dot = document.createElement('div');
+          dot.className='dot';
+          dot.style.background = PLAYER_COLORS[piece.p].color;
+          const label = document.createElement('span');
+          label.textContent = piece.h || 1;
+          dot.appendChild(label);
+          const badge = document.createElement('span');
+          const mark = TEAM_BADGE(piece.p);
+          badge.className = `badge ${mark}`;
+          badge.textContent = mark;
+          badge.title = (mark==='A')?'Team A（北+南）':'Team B（西+東）';
+          dot.appendChild(badge);
+          cell.appendChild(dot);
+        }
+
+        boardEl.appendChild(cell);
+      }
+    }
+
+    // 選択＆合法手のハイライト
+    if (SEL){
+      const {x,y} = SEL;
+      if (inB(ST.size,x,y) && at(x,y)){
+        const idx = y*ST.size + x;
+        boardEl.children[idx]?.classList.add('hl');
+        for (const m of legalFor(ST.current, x, y)){
+          const i = m.y*ST.size + m.x;
+          const el = boardEl.children[i]; if (!el) continue;
+          if (m.type==='capture') el.classList.add('capture');
+          else if (m.type==='stack') el.classList.add('stack');
+          else el.classList.add('legal');
+        }
+      }
+    }
+  }
+
+  // ====== オンライン時は index.html 側 onCellClick をキャンセル（競合防止） ======
+  document.addEventListener('click', (e)=>{
+    if (!window.__ONLINE_ROOM_ID) return;
+    if (e.target.closest('#board .cell')) {
+      e.stopPropagation();  // index.html の onCellClick に届かせない
+      // e.preventDefault(); // （必要なら）
+    }
+  }, true);
+
+  // ====== 盤クリック → サーバへ着手送信 ======
+  boardEl.addEventListener('click', (e)=>{
+    if (!window.__ONLINE_ROOM_ID) return;
     const cell = e.target.closest('.cell'); if (!cell) return;
     const x = +cell.dataset.x, y = +cell.dataset.y;
-    const at = (xx,yy)=> window.board[yy][xx];
 
-    if (window.selected){
-      const s = window.selected;
-      const piece = at(s.x,s.y);
-      if (!piece || piece.p!==window.current){ window.selected=null; if (window.render) window.render(); return; }
-      const legal = window.legalMovesFor(window.current, s.x, s.y);
-      const chosen = legal.find(m=>m.x===x && m.y===y);
-      if (!chosen){ window.selected=null; if (window.render) window.render(); return; }
-      sendMoveToServer({ fx:s.x, fy:s.y, tx:x, ty:y, type:chosen.type });
-      window.selected=null;
+    if (SEL){ // 2クリック目（移動先）
+      const piece = at(SEL.x, SEL.y);
+      if (!piece || piece.p!==ST.current){ SEL=null; renderOnline(); return; }
+      const mv = legalFor(ST.current, SEL.x, SEL.y).find(m=>m.x===x && m.y===y);
+      if (!mv){ SEL=null; renderOnline(); return; }
+
+      socket.emit('game:move', {
+        roomId: window.__ONLINE_ROOM_ID,
+        move: { fx:SEL.x, fy:SEL.y, tx:x, ty:y, type: mv.type }
+      });
+      SEL = null; // 選択解除（結果はサーバから届く）
       return;
     }
+
+    // 1クリック目（駒選択）
     const here = at(x,y);
-    if (here && here.p===window.current){ window.selected = {x,y}; if (window.render) window.render(); }
+    if (here && here.p===ST.current){ SEL = {x,y}; renderOnline(); }
   }, {passive:true});
 
-  // サーバー→クライアント同期（truthはサーバー）
+  // ====== サーバ同期 ======
   socket.on('room:update', ({ id, mode, state })=>{
     window.__ONLINE_ROOM_ID = id;
     $('labRoom').textContent = `Room: ${id} / Mode: ${mode}`;
-    window.size = state.size;
-    window.playerCount = state.playerCount;
-    window.current = state.current;
-    window.board = state.board.map(r=>r.map(c=>c?{...c}:null));
-    if (window.render) window.render();
-    if (window.updateStatus) window.updateStatus();
-  });
-  socket.on('room:created', ({id})=>{ window.__ONLINE_ROOM_ID = id; $('inpRoom').value = id; $('labRoom').textContent = `Room: ${id}`; });
+    ST = {
+      size: state.size,
+      playerCount: state.playerCount,
+      current: state.current,
+      board: state.board.map(r=>r.map(c=>c?{...c}:null))
+    };
+    renderOnline();
 
-  $('btnCreate').onclick = ()=> socket.emit('room:create', { mode: $('selMode').value, name: $('inpName').value || 'Player' });
-  $('btnJoin').onclick   = ()=> socket.emit('room:join',   { roomId: $('inpRoom').value.trim(), name: $('inpName').value || 'Player' });
-  $('btnSit').onclick    = ()=> socket.emit('room:sit',    { roomId: $('inpRoom').value.trim(), seatIndex: +$('selSeat').value, asAI:false, name: $('inpName').value || 'Player' });
-  $('btnSitAI').onclick  = ()=> socket.emit('room:sit',    { roomId: $('inpRoom').value.trim(), seatIndex: +$('selSeat').value, asAI:true });
-  $('btnLeaveSeat').onclick = ()=> socket.emit('room:leaveSeat', { roomId: $('inpRoom').value.trim(), seatIndex: +$('selSeat').value });
-  $('btnStartOnline').onclick = ()=> socket.emit('game:start', { roomId: $('inpRoom').value.trim(), mode: $('selMode').value });
+    // ステータス表示（index.htmlのラベルを借用）
+    const statusEl = document.getElementById('status');
+    if (statusEl){
+      const turnTeam = (TEAM_BADGE(ST.current)==='A')?'チームA（北+南）':'チームB（西+東）';
+      statusEl.textContent = (ST.playerCount===4)
+        ? `手番：${turnTeam}`
+        : `手番：${PLAYER_COLORS[ST.current].name}（1v1）`;
+    }
+  });
+
+  socket.on('room:created', ({id})=>{
+    window.__ONLINE_ROOM_ID = id;
+    $('inpRoom').value = id;
+    $('labRoom').textContent = `Room: ${id}`;
+  });
+
+  // ====== ロビー操作 ======
+  $('btnCreate').onclick     = ()=> socket.emit('room:create', { mode: $('selMode').value, name: $('inpName').value || 'Player' });
+  $('btnJoin').onclick       = ()=> socket.emit('room:join',   { roomId: $('inpRoom').value.trim(), name: $('inpName').value || 'Player' });
+  $('btnSit').onclick        = ()=> socket.emit('room:sit',    { roomId: $('inpRoom').value.trim(), seatIndex: +$('selSeat').value, asAI:false, name: $('inpName').value || 'Player' });
+  $('btnSitAI').onclick      = ()=> socket.emit('room:sit',    { roomId: $('inpRoom').value.trim(), seatIndex: +$('selSeat').value, asAI:true });
+  $('btnLeaveSeat').onclick  = ()=> socket.emit('room:leaveSeat', { roomId: $('inpRoom').value.trim(), seatIndex: +$('selSeat').value });
+  $('btnStartOnline').onclick= ()=> socket.emit('game:start',  { roomId: $('inpRoom').value.trim(), mode: $('selMode').value });
+
+  // 初期はローカル表示のまま。オンラインイベントを受け取ったら renderOnline() が上書きする。
 })();
