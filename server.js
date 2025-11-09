@@ -1,4 +1,4 @@
-// server.js — 全員操作 / AI同期 / 座席廃止版
+// server.js — EndLine Online (全員操作 + AI同期 + プレイヤー割り当て反映版)
 const express = require('express');
 const http = require('http');
 const cors = require('cors');
@@ -15,40 +15,32 @@ app.get('/health', (req, res) => res.status(200).send('ok'));
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*' } });
 
-// ---- 盤生成 ----
+// ---- 盤面生成 ----
 function emptyBoard(size) {
   return Array.from({ length: size }, () => Array.from({ length: size }, () => null));
 }
 function placeLine(board, size, p, lineIndex, horizontal, n = 4) {
   const st = Math.floor((size - n) / 2);
-  if (horizontal) {
-    for (let i = 0; i < n; i++) board[lineIndex][st + i] = { p, h: 1 };
-  } else {
-    for (let i = 0; i < n; i++) board[st + i][lineIndex] = { p, h: 1 };
-  }
+  if (horizontal) for (let i = 0; i < n; i++) board[lineIndex][st + i] = { p, h: 1 };
+  else for (let i = 0; i < n; i++) board[st + i][lineIndex] = { p, h: 1 };
 }
 function initState(mode) {
   const size = (mode === '2v2_8x8') ? 8 : 6;
   const playerCount = (mode === '2v2_8x8') ? 4 : 2;
   const board = emptyBoard(size);
+
   if (playerCount >= 2) {
     placeLine(board, size, 0, 0, true);
     placeLine(board, size, 1, size - 1, true);
   }
   if (playerCount >= 3) placeLine(board, size, 2, 0, false);
   if (playerCount >= 4) placeLine(board, size, 3, size - 1, false);
+
   return { size, playerCount, current: 0, board, ai: [false,false,false,false] };
 }
 
 // ---- ルーム ----
 const rooms = new Map();
-/*
- room = {
-   id,
-   mode,
-   state  // { size, playerCount, current, board, ai[] }
- }
-*/
 
 function broadcast(room) {
   io.to(room.id).emit('room:update', {
@@ -58,19 +50,14 @@ function broadcast(room) {
   });
 }
 
-// ---- AIターン ----
+// ---- AIターン処理 ----
 function ensureAIMove(room) {
   const p = room.state.current;
   if (!room.state.ai[p]) return;
 
-  const { move } = searchBestMove(room.state, {
-    maxTimeMs: 1200,
-    maxDepth: 8
-  });
-
+  const { move } = searchBestMove(room.state, { maxTimeMs: 1200, maxDepth: 8 });
   if (!move) {
-    // パス：次へ
-    const order = [0,3,1,2].filter(z=>z<room.state.playerCount);
+    const order = [0,3,1,2].filter(z => z < room.state.playerCount);
     const i = order.indexOf(room.state.current);
     room.state.current = order[(i+1)%order.length];
     broadcast(room);
@@ -114,11 +101,8 @@ io.on('connection', (socket) => {
   socket.on('game:move', ({ roomId, move }) => {
     const room = rooms.get(roomId);
     if (!room) return;
+    if (room.state.ai[room.state.current]) return; // AI手番は無視
 
-    // AI手番の場合は人間入力禁止
-    if (room.state.ai[room.state.current]) return;
-
-    // 合法判定
     const legal = rules.generateMoves(room.state);
     const ok = legal.find(m =>
       m.fx===move.fx && m.fy===move.fy &&
@@ -129,11 +113,20 @@ io.on('connection', (socket) => {
 
     room.state = rules.applyMove(room.state, ok);
     broadcast(room);
-
     if (!room.state.win) ensureAIMove(room);
   });
 
-  // ✅ AI切替（手番のプレイヤーをAI or 人へ）
+  // ✅ UI から来る「P1 = AI / Human」などの変更を正しく反映する **これが必要だった！**
+  socket.on('room:setAI', ({ roomId, player, value }) => {
+    const room = rooms.get(roomId);
+    if (!room) return;
+    if (player < 0 || player > 3) return;
+    room.state.ai[player] = !!value;
+    broadcast(room);
+    ensureAIMove(room);
+  });
+
+  // ✅ 手番のプレイヤーのみ AI/Human トグル（従来のAIボタン用）
   socket.on('room:toggleAI', ({ roomId }) => {
     const room = rooms.get(roomId);
     if (!room) return;
